@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ZIP转XHTML · 音频修复版</title>
+    <!-- 引入 JSZip 和 FileSaver -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: system-ui, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            background: linear-gradient(145deg, #f6f9fc 0%, #e9f1f8 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 1.5rem;
+        }
+        .card {
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border-radius: 2.5rem;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(255, 255, 255, 0.7) inset;
+            width: 100%;
+            max-width: 780px;
+            padding: 2.5rem 2.2rem;
+            transition: all 0.2s;
+        }
+        h1 {
+            font-size: 2.2rem;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+            color: #0b2b44;
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            margin-bottom: 0.25rem;
+        }
+        h1 span {
+            background: #0b2b44;
+            color: white;
+            font-size: 1rem;
+            font-weight: 500;
+            padding: 0.2rem 0.9rem;
+            border-radius: 40px;
+            letter-spacing: 0.3px;
+        }
+        .subhead {
+            color: #2c4c6b;
+            margin-bottom: 2rem;
+            font-size: 1rem;
+            border-left: 4px solid #4b8fc9;
+            padding-left: 1rem;
+            background: rgba(75, 143, 201, 0.08);
+            border-radius: 0 12px 12px 0;
+        }
+        .drop-zone {
+            border: 2.5px dashed #a0c1d9;
+            background: #f0f7fe;
+            border-radius: 2rem;
+            padding: 2.2rem 1.5rem;
+            text-align: center;
+            cursor: pointer;
+            transition: 0.25s ease;
+            margin-bottom: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .drop-zone:hover {
+            background: #e0effc;
+            border-color: #4b8fc9;
+        }
+        .drop-zone.drag-over {
+            background: #d3e8fc;
+            border-color: #1e6fb8;
+            transform: scale(1.01);
+        }
+        .drop-zone svg {
+            width: 48px;
+            height: 48px;
+            fill: none;
+            stroke: #1e6fb8;
+            stroke-width: 1.8;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+        .drop-zone p {
+            font-weight: 500;
+            color: #1f3e5a;
+            font-size: 1.1rem;
+        }
+        .drop-zone small {
+            color: #5b7f9c;
+            font-size: 0.85rem;
+        }
+        .file-info {
+            background: #ffffffdc;
+            border-radius: 1.2rem;
+            padding: 1rem 1.4rem;
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 0.95rem;
+            border: 1px solid #cde0f0;
+            box-shadow: 0 4px 12px rgba(0, 20, 40, 0.04);
+        }
+        .file-name {
+            font-weight: 600;
+            color: #0b2b44;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .file-name svg {
+            width: 18px;
+            height: 18px;
+            stroke: #1e6fb8;
+            fill: none;
+            stroke-width: 2;
+            flex-shrink: 0;
+        }
+        .badge {
+            background: #e3eef9;
+            border-radius: 30px;
+            padding: 0.25rem 1rem;
+            font-size: 0.8rem;
+            font-weight: 500;
+            color: #16466e;
+        }
+        .actions {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+        button {
+            border: none;
+            background: white;
+            border-radius: 3rem;
+            padding: 0.9rem 2rem;
+            font-weight: 600;
+            font-size: 1rem;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.6rem;
+            cursor: pointer;
+            transition: 0.2s ease;
+            border: 1px solid transparent;
+            flex: 1 1 auto;
+            min-width: 180px;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.02);
+        }
+        button.primary {
+            background: #0b2b44;
+            color: white;
+            box-shadow: 0 8px 20px -8px #0b2b4490;
+        }
+        button.primary:hover:not(:disabled) {
+            background: #123f63;
+            transform: translateY(-1px);
+            box-shadow: 0 12px 24px -10px #0b2b44b0;
+        }
+        button.secondary {
+            background: #ffffff;
+            border-color: #b8d1e5;
+            color: #1e4e77;
+        }
+        button.secondary:hover:not(:disabled) {
+            background: #f2faff;
+            border-color: #6da0c7;
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            filter: grayscale(0.3);
+            transform: none;
+            box-shadow: none;
+        }
+        button svg {
+            width: 20px;
+            height: 20px;
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+        .status {
+            margin-top: 1.5rem;
+            padding: 0.9rem 1.2rem;
+            border-radius: 1.2rem;
+            font-size: 0.92rem;
+            background: #e7f0f9;
+            color: #15486e;
+            border-left: 6px solid #2d7fc1;
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            transition: 0.2s;
+        }
+        .status.error {
+            background: #ffe9e7;
+            border-left-color: #c73e2e;
+            color: #822b1f;
+        }
+        .status.success {
+            background: #e3f5ec;
+            border-left-color: #1d8a5c;
+            color: #0b533a;
+        }
+        .status svg {
+            width: 20px;
+            height: 20px;
+            flex-shrink: 0;
+        }
+        .hidden {
+            display: none;
+        }
+        .mt-3 {
+            margin-top: 1rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>
+            ZIP → XHTML
+            <span>音频修复版</span>
+        </h1>
+        <div class="subhead">
+            📦 将 ZIP 中的图片、样式、音频等资源转为内联 XHTML 文件。完全在浏览器本地处理。
+        </div>
+
+        <!-- 拖拽/点击上传区 -->
+        <div id="dropZone" class="drop-zone">
+            <svg viewBox="0 0 24 24">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="17 8 12 3 7 8" />
+                <line x1="12" y1="3" x2="12" y2="15" />
+            </svg>
+            <p>点击选择 ZIP 文件，或拖拽到这里</p>
+            <small>支持 .zip 格式 · 自动识别 XHTML/HTML 主文档 · 内联音频/视频</small>
+        </div>
+
+        <!-- 文件信息卡片 -->
+        <div id="fileInfo" class="file-info hidden">
+            <div class="file-name">
+                <svg viewBox="0 0 24 24">
+                    <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
+                    <polyline points="13 2 13 9 20 9" />
+                </svg>
+                <span id="fileNameDisplay">archive.zip</span>
+            </div>
+            <span id="fileSizeDisplay" class="badge">0 KB</span>
+        </div>
+
+        <!-- 操作按钮区 -->
+        <div class="actions">
+            <button id="convertBtn" class="primary" disabled>
+                <svg viewBox="0 0 24 24">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <polyline points="14 2 14 8 20 8" />
+                    <line x1="16" y1="13" x2="8" y2="13" />
+                    <line x1="16" y1="17" x2="8" y2="17" />
+                    <polyline points="10 9 9 9 8 9" />
+                </svg>
+                转换并下载 XHTML
+            </button>
+            <button id="clearBtn" class="secondary" disabled>
+                <svg viewBox="0 0 24 24">
+                    <polyline points="3 6 5 6 21 6" />
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                </svg>
+                清除文件
+            </button>
+        </div>
+
+        <!-- 状态显示区 -->
+        <div id="status" class="status">
+            <svg viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="16" x2="12" y2="12" />
+                <line x1="12" y1="8" x2="12.01" y2="8" />
+            </svg>
+            <span id="statusMessage">等待上传 ZIP 文件……</span>
+        </div>
+    </div>
+
+    <script>
+        (function(){
+            // DOM 元素
+            const dropZone = document.getElementById('dropZone');
+            const fileInfoDiv = document.getElementById('fileInfo');
+            const fileNameDisplay = document.getElementById('fileNameDisplay');
+            const fileSizeDisplay = document.getElementById('fileSizeDisplay');
+            const convertBtn = document.getElementById('convertBtn');
+            const clearBtn = document.getElementById('clearBtn');
+            const statusDiv = document.getElementById('status');
+            const statusMessage = document.getElementById('statusMessage');
+
+            // 状态变量
+            let currentFile = null;
+            let currentZip = null;
+
+            // 更新状态栏
+            function setStatus(message, type = 'info') {
+                statusMessage.textContent = message;
+                statusDiv.className = 'status';
+                if (type === 'error') {
+                    statusDiv.classList.add('error');
+                } else if (type === 'success') {
+                    statusDiv.classList.add('success');
+                }
+            }
+
+            // 重置文件信息
+            function resetFileInfo() {
+                currentFile = null;
+                currentZip = null;
+                fileInfoDiv.classList.add('hidden');
+                convertBtn.disabled = true;
+                clearBtn.disabled = true;
+                dropZone.classList.remove('drag-over');
+                setStatus('等待上传 ZIP 文件……', 'info');
+            }
+
+            // 更新文件信息显示
+            function updateFileInfo(file) {
+                if (!file) {
+                    resetFileInfo();
+                    return;
+                }
+                currentFile = file;
+                fileNameDisplay.textContent = file.name;
+                const sizeKB = (file.size / 1024).toFixed(1);
+                fileSizeDisplay.textContent = sizeKB + ' KB';
+                fileInfoDiv.classList.remove('hidden');
+                convertBtn.disabled = false;
+                clearBtn.disabled = false;
+                setStatus(`已加载: ${file.name}  (${sizeKB} KB)`, 'info');
+            }
+
+            // 处理 ZIP 文件 (读取并缓存JSZip实例)
+            async function processZipFile(file) {
+                if (!file) return;
+                if (!file.name.toLowerCase().endsWith('.zip') && file.type !== 'application/zip' && file.type !== 'application/x-zip-compressed') {
+                    setStatus('请选择 ZIP 格式的文件。', 'error');
+                    resetFileInfo();
+                    return;
+                }
+
+                setStatus('正在读取 ZIP 文件……', 'info');
+                try {
+                    const arrayBuffer = await file.arrayBuffer();
+                    const zip = await JSZip.loadAsync(arrayBuffer);
+                    currentZip = zip;
+                    updateFileInfo(file);
+                    setStatus('ZIP 读取成功，可以转换为 XHTML。', 'success');
+                } catch (error) {
+                    console.error(error);
+                    setStatus('ZIP 解析失败: 文件可能损坏或非标准 ZIP。', 'error');
+                    resetFileInfo();
+                }
+            }
+
+            // 从 zip 中智能寻找主 HTML/XHTML 文件
+            function findMainHtmlFile(entries) {
+                const htmlFiles = Object.keys(entries).filter(path => {
+                    const lower = path.toLowerCase();
+                    return lower.endsWith('.html') || lower.endsWith('.xhtml') || lower.endsWith('.htm');
+                });
+
+                if (htmlFiles.length === 0) return null;
+
+                // 优先 index.*
+                const indexFile = htmlFiles.find(f => {
+                    const base = f.split('/').pop().toLowerCase();
+                    return base === 'index.html' || base === 'index.xhtml' || base === 'index.htm';
+                });
+                if (indexFile) return indexFile;
+
+                // 否则返回路径最短的
+                htmlFiles.sort((a, b) => {
+                    const aLen = a.split('/').length;
+                    const bLen = b.split('/').length;
+                    if (aLen !== bLen) return aLen - bLen;
+                    return a.length - b.length;
+                });
+                return htmlFiles[0];
+            }
+
+            // 获取 MIME 类型 (全面支持音频/视频)
+            function getMimeType(filename) {
+                const ext = filename.split('.').pop().toLowerCase();
+                const map = {
+                    // 图片
+                    'png': 'image/png',
+                    'jpg': 'image/jpeg',
+                    'jpeg': 'image/jpeg',
+                    'gif': 'image/gif',
+                    'webp': 'image/webp',
+                    'svg': 'image/svg+xml',
+                    'bmp': 'image/bmp',
+                    'ico': 'image/x-icon',
+                    'tiff': 'image/tiff',
+                    'tif': 'image/tiff',
+                    // 音频
+                    'mp3': 'audio/mpeg',
+                    'wav': 'audio/wav',
+                    'ogg': 'audio/ogg',
+                    'oga': 'audio/ogg',
+                    'm4a': 'audio/mp4',
+                    'aac': 'audio/aac',
+                    'flac': 'audio/flac',
+                    'opus': 'audio/opus',
+                    'weba': 'audio/webm',
+                    // 视频
+                    'mp4': 'video/mp4',
+                    'webm': 'video/webm',
+                    'ogv': 'video/ogg',
+                    'avi': 'video/x-msvideo',
+                    'mov': 'video/quicktime',
+                    'wmv': 'video/x-ms-wmv',
+                    'flv': 'video/x-flv',
+                    'mkv': 'video/x-matroska',
+                    'm4v': 'video/mp4',
+                    // 样式
+                    'css': 'text/css',
+                    // 字体
+                    'woff': 'font/woff',
+                    'woff2': 'font/woff2',
+                    'ttf': 'font/ttf',
+                    'otf': 'font/otf',
+                    'eot': 'application/vnd.ms-fontobject',
+                    // 脚本
+                    'js': 'application/javascript',
+                    'mjs': 'application/javascript',
+                    // 其他
+                    'json': 'application/json',
+                    'xml': 'application/xml',
+                    'txt': 'text/plain',
+                };
+                return map[ext] || 'application/octet-stream';
+            }
+
+            // 将 zip 内资源转换为 data URI，并替换主文档中的引用
+            async function convertZipToXHTML(zip) {
+                if (!zip) throw new Error('没有可用的 ZIP 数据');
+
+                const entries = zip.files;
+                const mainHtmlPath = findMainHtmlFile(entries);
+                if (!mainHtmlPath) {
+                    throw new Error('ZIP 中未找到 .html / .xhtml / .htm 文件');
+                }
+
+                const mainFile = entries[mainHtmlPath];
+                let htmlContent = await mainFile.async('string');
+
+                // 收集所有需要内联的资源（排除目录和主HTML自身）
+                const resourceEntries = Object.entries(entries).filter(([path, entry]) => {
+                    if (entry.dir) return false;
+                    if (path === mainHtmlPath) return false;
+                    return true;
+                });
+
+                // 存储资源路径 -> data URI
+                const resourceMap = new Map();
+
+                // 异步读取所有资源并转换 (分块处理避免堆栈溢出)
+                const resourcePromises = resourceEntries.map(async ([path, entry]) => {
+                    try {
+                        const mime = getMimeType(path);
+                        const content = await entry.async('uint8array');
+                        
+                        // 分块转换为 base64，避免大文件堆栈溢出
+                        let binary = '';
+                        const len = content.byteLength;
+                        const chunkSize = 0x8000; // 32KB
+                        for (let i = 0; i < len; i += chunkSize) {
+                            binary += String.fromCharCode.apply(null, content.subarray(i, i + chunkSize));
+                        }
+                        const base64 = btoa(binary);
+                        const dataUri = `data:${mime};base64,${base64}`;
+                        resourceMap.set(path, dataUri);
+                    } catch (e) {
+                        console.warn(`无法处理资源: ${path}`, e);
+                    }
+                });
+
+                await Promise.all(resourcePromises);
+
+                // 替换主 HTML 中的引用
+                let modifiedHtml = htmlContent;
+
+                // 按路径长度降序排序，避免短路径先被替换影响长路径
+                const sortedPaths = Array.from(resourceMap.keys()).sort((a, b) => b.length - a.length);
+
+                for (const path of sortedPaths) {
+                    const dataUri = resourceMap.get(path);
+                    const escapedPath = path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    
+                    // 替换 src="path" / href="path" / poster="path" / data-src="path"
+                    const attrRegex = new RegExp(`(src|href|poster|data-src)=(["'])(${escapedPath})\\2`, 'gi');
+                    modifiedHtml = modifiedHtml.replace(attrRegex, (match, attr, quote) => {
+                        return `${attr}=${quote}${dataUri}${quote}`;
+                    });
+
+                    // 替换 style 中的 url(path)
+                    const urlRegex = new RegExp(`url\\((['"]?)(${escapedPath})\\1\\)`, 'gi');
+                    modifiedHtml = modifiedHtml.replace(urlRegex, (match, quote) => {
+                        return `url(${quote}${dataUri}${quote})`;
+                    });
+                }
+
+                // 额外处理：srcset 中的路径（简化处理，按空格分割）
+                // 这里不再展开，保持核心功能。
+
+                return modifiedHtml;
+            }
+
+            // 转换并自动下载
+            async function handleConvert() {
+                if (!currentZip) {
+                    setStatus('没有可用的 ZIP 文件，请先上传。', 'error');
+                    return;
+                }
+
+                setStatus('正在分析 ZIP 并生成 XHTML……', 'info');
+                convertBtn.disabled = true;
+                convertBtn.innerHTML = `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>转换中…`;
+
+                try {
+                    const entries = currentZip.files;
+                    const mainHtmlPath = findMainHtmlFile(entries);
+                    if (!mainHtmlPath) {
+                        throw new Error('ZIP 中未找到 HTML/XHTML 文件');
+                    }
+
+                    const xhtmlContent = await convertZipToXHTML(currentZip);
+                    
+                    // 生成输出文件名
+                    let baseName = mainHtmlPath.split('/').pop().replace(/\.(html|xhtml|htm)$/i, '');
+                    if (!baseName) baseName = 'document';
+                    const outFileName = `${baseName}.xhtml`;
+
+                    // 创建 Blob 并自动下载
+                    const blob = new Blob([xhtmlContent], { type: 'application/xhtml+xml' });
+                    saveAs(blob, outFileName);
+
+                    setStatus(`✅ 转换成功！已自动下载 ${outFileName}`, 'success');
+                } catch (error) {
+                    console.error(error);
+                    setStatus(`转换失败: ${error.message}`, 'error');
+                } finally {
+                    if (currentFile) {
+                        convertBtn.disabled = false;
+                    } else {
+                        convertBtn.disabled = true;
+                    }
+                    convertBtn.innerHTML = `<svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /><polyline points="10 9 9 9 8 9" /></svg>转换并下载 XHTML`;
+                }
+            }
+
+            // 清除文件
+            function handleClear() {
+                resetFileInfo();
+                setStatus('等待上传 ZIP 文件……', 'info');
+            }
+
+            // 处理文件选择
+            function handleFileSelect(file) {
+                if (!file) return;
+                processZipFile(file);
+            }
+
+            // 拖拽事件
+            dropZone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                dropZone.classList.add('drag-over');
+            });
+            dropZone.addEventListener('dragleave', () => {
+                dropZone.classList.remove('drag-over');
+            });
+            dropZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                dropZone.classList.remove('drag-over');
+                const files = e.dataTransfer.files;
+                if (files.length > 0) {
+                    handleFileSelect(files[0]);
+                }
+            });
+
+            // 点击上传
+            dropZone.addEventListener('click', () => {
+                const fileInput = document.createElement('input');
+                fileInput.type = 'file';
+                fileInput.accept = '.zip,application/zip,application/x-zip-compressed';
+                fileInput.onchange = (e) => {
+                    if (fileInput.files.length > 0) {
+                        handleFileSelect(fileInput.files[0]);
+                    }
+                };
+                fileInput.click();
+            });
+
+            // 按钮事件
+            convertBtn.addEventListener('click', handleConvert);
+            clearBtn.addEventListener('click', handleClear);
+
+            // 初始化状态
+            resetFileInfo();
+        })();
+    </script>
+</body>
+</html>
