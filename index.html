@@ -286,13 +286,13 @@
     </footer>
 </div>
 
-<!-- 引入 zip.js 用于读取 ZIP -->
+<!-- 引入 zip.js 用于读取 ZIP (使用 2.7.57 版本，避免新版兼容问题) -->
 <script src="https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.7.57/dist/zip.min.js"></script>
 <script>
     (function() {
         // --- 全局状态 ---
         let currentZipFile = null;          // File 对象
-        let currentZipEntries = null;       // zip 条目列表 (用于显示 / 转换)
+        let currentZipEntries = null;       // zip 条目列表
         let zipReader = null;               // ZipReader 实例
         let isProcessing = false;
 
@@ -327,12 +327,17 @@
             statusDiv.innerHTML = `<span>${icon}</span> ${message}`;
         }
 
-        // 清空所有状态
-        function resetState(clearFile = true) {
+        // 清理 ZIP 读取器
+        function closeZipReader() {
             if (zipReader) {
-                try { zipReader.close(); } catch (e) { /* ignore */ }
+                try { zipReader.close(); } catch (e) { /* 忽略 */ }
                 zipReader = null;
             }
+        }
+
+        // 清空所有状态 (重置)
+        function resetState(clearFile = true) {
+            closeZipReader();
             if (clearFile) {
                 currentZipFile = null;
                 currentZipEntries = null;
@@ -342,15 +347,19 @@
                 dropZone.classList.remove('hidden');
                 setStatus('等待选择 ZIP 文件');
             }
-            // 清空文件显示
             fileNameDisplay.textContent = '未选择文件';
             fileSizeDisplay.textContent = '0 KB';
         }
 
-        // 解析 ZIP 并展示基本信息 (不转换)
+        // 核心：加载 ZIP 文件并解析条目
         async function loadZipFile(file) {
-            if (isProcessing) return;
+            if (isProcessing) {
+                setStatus('正在处理，请稍后再试', 'error');
+                return;
+            }
             if (!file) return;
+
+            // 简单校验
             if (!file.name.toLowerCase().endsWith('.zip') && file.type !== 'application/zip' && file.type !== 'application/x-zip-compressed') {
                 setStatus('请选择有效的 ZIP 文件', 'error');
                 return;
@@ -361,36 +370,52 @@
             }
 
             // 清理旧资源
-            if (zipReader) {
-                try { zipReader.close(); } catch (e) {}
-                zipReader = null;
-            }
+            closeZipReader();
             currentZipFile = file;
             currentZipEntries = null;
+            convertBtn.disabled = true;
+
+            // 显示加载中
+            setStatus('正在读取 ZIP 文件...', 'info');
+            fileNameDisplay.textContent = file.name;
+            fileSizeDisplay.textContent = formatFileSize(file.size);
+            fileInfoDiv.classList.remove('hidden');
 
             try {
-                // 使用 zip.js 读取 ZIP 条目
-                zipReader = new zip.ZipReader(new zip.BlobReader(file), { useWebWorkers: true });
+                // 使用 BlobReader 读取 File 对象
+                const blobReader = new zip.BlobReader(file);
+                // 注意：必须使用 zip.ZipReader 构造，并传入配置
+                zipReader = new zip.ZipReader(blobReader, { useWebWorkers: true });
                 const entries = await zipReader.getEntries();
+
+                if (!entries || entries.length === 0) {
+                    throw new Error('ZIP 文件为空或无法解析');
+                }
+
                 currentZipEntries = entries;
-
-                // 显示文件信息
-                fileNameDisplay.textContent = file.name;
-                fileSizeDisplay.textContent = formatFileSize(file.size);
-                fileInfoDiv.classList.remove('hidden');
+                // 过滤出文件（排除目录）
+                const fileEntries = entries.filter(e => !e.directory);
+                setStatus(`✅ 已加载 ZIP · 共 ${entries.length} 个条目 (${fileEntries.length} 个文件)`, 'success');
                 convertBtn.disabled = false;
-                setStatus(`已加载 ZIP · ${entries.length} 个条目`, 'success');
 
-                // 隐藏拖拽区？保留，但可以保留界面，不过为了美观我们依然显示，但文件已经选择。也可以保持显示，只是作为可拖拽区域。
-                // 不隐藏 dropZone，让用户还可以重新选
+                // 可选：如果没有任何 html 文件，提前给出警告，但依然允许转换（转换时会报错）
+                const hasHtml = fileEntries.some(e => e.filename.toLowerCase().endsWith('.html') || e.filename.toLowerCase().endsWith('.htm'));
+                if (!hasHtml) {
+                    setStatus('⚠️ 压缩包内未找到 HTML 文件，转换可能失败', 'error');
+                    // 不直接禁止转换，让用户尝试时得到明确错误
+                }
             } catch (err) {
-                console.error(err);
+                console.error('ZIP 读取失败:', err);
+                closeZipReader();
+                currentZipFile = null;
+                currentZipEntries = null;
+                convertBtn.disabled = true;
                 setStatus(`读取 ZIP 失败: ${err.message || '未知错误'}`, 'error');
-                resetState(true);
+                // 保留文件信息显示，但禁用转换
             }
         }
 
-        // 核心：将 ZIP 转换为 MHTML 并下载
+        // 转换并下载 MHTML
         async function convertToMhtml() {
             if (isProcessing) return;
             if (!currentZipFile || !currentZipEntries) {
@@ -404,18 +429,15 @@
             setStatus('正在解析 ZIP 并生成 MHTML ...', 'info');
 
             try {
-                const keepStructure = optionKeepStructure.checked;
+                const keepStructure = optionKeepStructure.checked; // 目前未完全使用，但保留字段
                 const removeScripts = optionRemoveScripts.checked;
                 const inlineAssets = optionInlineStyles.checked;
 
-                // 1. 收集所有条目信息，找到主 HTML 文件 (优先 index.html 或第一个 .html)
                 const entries = currentZipEntries;
                 const fileEntries = entries.filter(entry => !entry.directory);
-                if (fileEntries.length === 0) {
-                    throw new Error('ZIP 中没有文件');
-                }
+                if (fileEntries.length === 0) throw new Error('ZIP 中没有文件');
 
-                // 找主 HTML
+                // 查找主 HTML 文件 (优先 index.html/index.htm)
                 let mainHtmlEntry = fileEntries.find(e => 
                     e.filename.toLowerCase().endsWith('index.html') || 
                     e.filename.toLowerCase().endsWith('index.htm')
@@ -426,44 +448,32 @@
                         e.filename.toLowerCase().endsWith('.htm')
                     );
                 }
-                if (!mainHtmlEntry) {
-                    throw new Error('未找到 HTML 文件 (需要 .html 或 .htm)');
-                }
+                if (!mainHtmlEntry) throw new Error('未找到 HTML 文件 (需要 .html 或 .htm)');
 
-                // 2. 读取主 HTML 内容 (作为文本)
+                // 读取主 HTML 内容
                 const mainContent = await mainHtmlEntry.getData(new zip.TextWriter());
                 let htmlText = mainContent;
 
-                // 3. 建立文件名到 entry 的映射 (用于后续查找资源)
-                const entryMap = new Map();
-                fileEntries.forEach(entry => {
-                    entryMap.set(entry.filename, entry);
-                });
-
-                // 4. 如果有必要，移除 <script> (使用简单的正则，但不要破坏结构)
+                // 移除脚本（简单正则）
                 if (removeScripts) {
                     htmlText = htmlText.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
                 }
 
-                // 5. 处理资源内联 (图片、CSS、字体等) —— 基于 base64
-                //    我们使用 DOMParser 更稳健地处理 HTML
+                // 解析 HTML
                 const parser = new DOMParser();
                 const doc = parser.parseFromString(htmlText, 'text/html');
 
-                // 获取主 HTML 所在目录 (用于相对路径解析)
+                // 主 HTML 所在目录
                 const mainPath = mainHtmlEntry.filename;
                 const mainDir = mainPath.includes('/') ? mainPath.substring(0, mainPath.lastIndexOf('/') + 1) : '';
 
-                // 辅助: 规范化路径 (处理 ../ 和 ./)
+                // 路径解析辅助
                 function resolvePath(baseDir, relativePath) {
-                    if (relativePath.startsWith('http://') || relativePath.startsWith('https://') || relativePath.startsWith('//') || relativePath.startsWith('data:')) {
-                        return null; // 外部资源不处理
+                    if (!relativePath || relativePath.startsWith('http://') || relativePath.startsWith('https://') || relativePath.startsWith('//') || relativePath.startsWith('data:')) {
+                        return null;
                     }
-                    // 移除开头的 ./
                     if (relativePath.startsWith('./')) relativePath = relativePath.substring(2);
-                    // 组合路径
                     let fullPath = baseDir + relativePath;
-                    // 规范化: 处理 ../
                     const segments = fullPath.split('/');
                     const stack = [];
                     for (let seg of segments) {
@@ -476,7 +486,11 @@
                     return stack.join('/');
                 }
 
-                // 获取资源的 data URL (base64)
+                // 建立条目映射
+                const entryMap = new Map();
+                fileEntries.forEach(entry => entryMap.set(entry.filename, entry));
+
+                // 获取资源 Data URL (base64)
                 async function getResourceDataUrl(entry) {
                     if (!entry) return null;
                     try {
@@ -493,8 +507,9 @@
                     }
                 }
 
-                // 6. 处理所有 <img> 的 src
+                // 内联处理
                 if (inlineAssets) {
+                    // 处理 <img src>
                     const imgTags = doc.querySelectorAll('img[src]');
                     for (let img of imgTags) {
                         const src = img.getAttribute('src');
@@ -508,8 +523,7 @@
                         }
                     }
 
-                    // 处理 <link rel="stylesheet"> 和 <style> 内 url()
-                    // 简化：先将外链 CSS 内联为 <style>，并处理 CSS 中的 url()
+                    // 处理 <link rel="stylesheet">
                     const linkTags = doc.querySelectorAll('link[rel="stylesheet"]');
                     for (let link of linkTags) {
                         const href = link.getAttribute('href');
@@ -520,14 +534,10 @@
                         if (entry) {
                             try {
                                 let cssText = await entry.getData(new zip.TextWriter());
-                                // 处理 CSS 中的 url(...)
-                                // 匹配 url(...) 但不匹配 data:
+                                // 处理 CSS 内 url()
+                                const baseCssDir = resolved.includes('/') ? resolved.substring(0, resolved.lastIndexOf('/') + 1) : '';
                                 const urlRegex = /url\((['"]?)([^'")]+)\1\)/g;
                                 let match;
-                                const cssPromises = [];
-                                const baseCssDir = resolved.includes('/') ? resolved.substring(0, resolved.lastIndexOf('/') + 1) : '';
-                                // 需要同步替换？使用 while 加 await 不好，我们先收集所有匹配项，然后替换
-                                // 简单方法：用异步替换
                                 const matches = [];
                                 while ((match = urlRegex.exec(cssText)) !== null) {
                                     const fullUrl = match[2];
@@ -535,18 +545,12 @@
                                     const resolvedUrl = resolvePath(baseCssDir, fullUrl);
                                     if (!resolvedUrl) continue;
                                     const resourceEntry = entryMap.get(resolvedUrl);
-                                    if (resourceEntry) {
-                                        matches.push({ fullMatch: match[0], url: fullUrl, resolved: resolvedUrl, entry: resourceEntry });
-                                    }
+                                    if (resourceEntry) matches.push({ fullMatch: match[0], entry: resourceEntry });
                                 }
-                                // 异步替换
                                 for (let m of matches) {
                                     const dataUrl = await getResourceDataUrl(m.entry);
-                                    if (dataUrl) {
-                                        cssText = cssText.replace(m.fullMatch, `url(${dataUrl})`);
-                                    }
+                                    if (dataUrl) cssText = cssText.replace(m.fullMatch, `url(${dataUrl})`);
                                 }
-                                // 创建新的 style 标签替换 link
                                 const styleEl = doc.createElement('style');
                                 styleEl.textContent = cssText;
                                 link.parentNode.replaceChild(styleEl, link);
@@ -556,78 +560,60 @@
                         }
                     }
 
-                    // 再处理一次 <style> 标签内的 url() (可能内联 CSS 包含图片)
+                    // 处理 <style> 标签中的 url()
                     const styleTags = doc.querySelectorAll('style');
                     for (let style of styleTags) {
                         let cssText = style.textContent;
                         const urlRegex = /url\((['"]?)([^'")]+)\1\)/g;
-                        const matches = [];
                         let match;
+                        const matches = [];
                         while ((match = urlRegex.exec(cssText)) !== null) {
                             const fullUrl = match[2];
                             if (fullUrl.startsWith('data:') || fullUrl.startsWith('http')) continue;
                             const resolvedUrl = resolvePath(mainDir, fullUrl);
                             if (!resolvedUrl) continue;
                             const resourceEntry = entryMap.get(resolvedUrl);
-                            if (resourceEntry) {
-                                matches.push({ fullMatch: match[0], entry: resourceEntry });
-                            }
+                            if (resourceEntry) matches.push({ fullMatch: match[0], entry: resourceEntry });
                         }
                         for (let m of matches) {
                             const dataUrl = await getResourceDataUrl(m.entry);
-                            if (dataUrl) {
-                                cssText = cssText.replace(m.fullMatch, `url(${dataUrl})`);
-                            }
+                            if (dataUrl) cssText = cssText.replace(m.fullMatch, `url(${dataUrl})`);
                         }
                         style.textContent = cssText;
                     }
                 }
 
-                // 重新生成 HTML 字符串
+                // 序列化 HTML
                 const serializer = new XMLSerializer();
                 let finalHtml = serializer.serializeToString(doc);
 
-                // 确保 DOCTYPE 保留 (如果有)
+                // 保留 DOCTYPE
                 if (mainContent.trim().toLowerCase().startsWith('<!doctype')) {
-                    // DOMParser 有时会丢弃 doctype，手动补上
                     if (!finalHtml.toLowerCase().includes('<!doctype')) {
                         const doctypeMatch = mainContent.match(/<!DOCTYPE[^>]*>/i);
-                        if (doctypeMatch) {
-                            finalHtml = doctypeMatch[0] + '\n' + finalHtml;
-                        }
+                        if (doctypeMatch) finalHtml = doctypeMatch[0] + '\n' + finalHtml;
                     }
                 }
 
-                // 7. 构建 MHTML 内容
-                //    根据 RFC 2557 构建 multipart/related
+                // 构建 MHTML
                 const boundary = '----=_NextPart_' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
                 const mhtmlParts = [];
 
-                // 7.1 第一部分: 主 HTML (Content-Type: text/html)
-                //     需要把 finalHtml 作为 quoted-printable 或者 base64？为了简单，使用 base64 避免编码问题，但 MHTML 也支持 quoted-printable。
-                //     这里使用 base64 (更安全)
-                const htmlBase64 = btoa(unescape(encodeURIComponent(finalHtml))); // 处理 Unicode
-                const htmlPart = [
+                // 主 HTML 部分
+                const htmlBase64 = btoa(unescape(encodeURIComponent(finalHtml)));
+                mhtmlParts.push([
                     `--${boundary}`,
                     `Content-Type: text/html; charset="utf-8"`,
                     `Content-Transfer-Encoding: base64`,
                     `Content-Location: ${mainPath}`,
                     ``,
                     htmlBase64
-                ].join('\r\n');
-                mhtmlParts.push(htmlPart);
+                ].join('\r\n'));
 
-                // 7.2 可选: 将 ZIP 内其他文件作为附件？但是 MHTML 主要依赖内联资源。为了完整性，可以把未被内联的文件也作为 MIME 部分加入？
-                //     但为了简单，且由于我们已经内联了图片/CSS，不需要再额外附加。不过有可能有背景图等漏网之鱼，但为了示例简洁，只保留主 HTML。
-                //     但用户期望“ZIP转MHTML”，可能希望资源合并进去。我们可以把 ZIP 中所有文件都作为独立 MIME part 加入，并在 Content-Location 中保留路径。
-                //     这样，如果 HTML 中引用了未内联的资源（比如一些通过 CSS 或 JS 动态加载），但浏览器可能不会去取，但作为 MHTML 支持。
-                //     但考虑到选项“内联样式/图片”，如果未勾选，可能用户希望保留原始引用并由 MHTML 中的其他 part 提供。因此我们实现：
-                //     如果 inlineAssets 为 false，则把非 HTML 文件都作为附件加入，保留 Content-Location。
+                // 如果不内联资源，则将其他文件作为独立部分加入
                 if (!inlineAssets) {
-                    // 遍历除主 HTML 外的所有文件，作为 MIME part 加入
                     for (let entry of fileEntries) {
-                        if (entry.filename === mainPath) continue; // 跳过主 HTML
-                        // 根据文件扩展名猜测 mime
+                        if (entry.filename === mainPath) continue;
                         const ext = entry.filename.split('.').pop().toLowerCase();
                         let mimeType = 'application/octet-stream';
                         if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) mimeType = `image/${ext === 'svg' ? 'svg+xml' : ext}`;
@@ -637,36 +623,28 @@
                         else if (['html', 'htm'].includes(ext)) mimeType = 'text/html';
                         else if (['txt', 'json', 'xml'].includes(ext)) mimeType = `text/${ext === 'txt' ? 'plain' : ext}`;
 
-                        // 读取数据 (base64)
                         try {
                             const blob = await entry.getData(new zip.BlobWriter());
                             const base64Data = await new Promise((resolve, reject) => {
                                 const reader = new FileReader();
-                                reader.onload = () => {
-                                    const dataUrl = reader.result;
-                                    // 去掉 data:...;base64, 前缀
-                                    const base64 = dataUrl.split(',')[1];
-                                    resolve(base64);
-                                };
+                                reader.onload = () => resolve(reader.result.split(',')[1]);
                                 reader.onerror = reject;
                                 reader.readAsDataURL(blob);
                             });
-                            const part = [
+                            mhtmlParts.push([
                                 `--${boundary}`,
                                 `Content-Type: ${mimeType}`,
                                 `Content-Transfer-Encoding: base64`,
                                 `Content-Location: ${entry.filename}`,
                                 ``,
                                 base64Data
-                            ].join('\r\n');
-                            mhtmlParts.push(part);
+                            ].join('\r\n'));
                         } catch (e) {
-                            console.warn(`读取 ${entry.filename} 失败`, e);
+                            console.warn(`附加文件 ${entry.filename} 失败`, e);
                         }
                     }
                 }
 
-                // 最终 MHTML 内容
                 const mhtmlContent = [
                     'From: <Saved by ZIP to MHTML Converter>',
                     'Subject: Converted from ZIP',
@@ -678,7 +656,7 @@
                     ''
                 ].join('\r\n');
 
-                // 8. 下载
+                // 下载
                 const blob = new Blob([mhtmlContent], { type: 'multipart/related' });
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
@@ -689,9 +667,9 @@
                 document.body.removeChild(a);
                 setTimeout(() => URL.revokeObjectURL(url), 2000);
 
-                setStatus(`✅ 转换成功 · 已下载 MHTML (主文件: ${mainPath})`, 'success');
+                setStatus(`✅ 转换成功 · 主文件: ${mainPath}`, 'success');
             } catch (err) {
-                console.error(err);
+                console.error('转换失败:', err);
                 setStatus(`转换失败: ${err.message || '未知错误'}`, 'error');
             } finally {
                 isProcessing = false;
@@ -707,6 +685,7 @@
             const file = e.target.files[0];
             if (file) {
                 loadZipFile(file).catch(err => {
+                    console.error(err);
                     setStatus(`加载失败: ${err.message}`, 'error');
                 });
             }
@@ -726,21 +705,22 @@
             const file = e.dataTransfer.files[0];
             if (file) {
                 loadZipFile(file).catch(err => {
+                    console.error(err);
                     setStatus(`加载失败: ${err.message}`, 'error');
                 });
             }
         });
 
-        // 点击转换
+        // 转换按钮
         convertBtn.addEventListener('click', convertToMhtml);
 
-        // 重置
+        // 重置按钮
         resetBtn.addEventListener('click', () => {
             if (isProcessing) return;
             resetState(true);
         });
 
-        // 页面加载完成后的默认状态
+        // 初始化
         resetState(true);
     })();
 </script>
